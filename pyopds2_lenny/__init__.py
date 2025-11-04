@@ -51,7 +51,6 @@ class LennyDataProvider(OpenLibraryDataProvider):
         numfound: int,
         limit: int,
         offset: int,
-        fields: Optional[List[str]] = None,
         lenny_ids: Optional[List[int]] = None,
     ) -> Tuple[List[LennyDataRecord], int]:
         """
@@ -63,7 +62,6 @@ class LennyDataProvider(OpenLibraryDataProvider):
             query=query,
             limit=limit,
             offset=offset,
-            fields=fields,
         )
 
         # Adapt OpenLibraryDataRecords to LennyDataRecords
