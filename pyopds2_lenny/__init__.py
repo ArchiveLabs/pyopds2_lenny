@@ -1,5 +1,6 @@
 # pyopds_lenny/__init__.py
 from typing import List, Tuple, Optional
+from collections.abc import Mapping
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
 from opds2.provider import SearchResponse
 
@@ -121,19 +122,28 @@ class LennyDataProvider(OpenLibraryDataProvider):
         else:
             ol_records, total = _unwrap_search_response(resp)
 
-        # Normalize lenny_ids to an indexable list (dict_keys or other iterables
-        # may not support indexing). This ensures we pick the exact id by
-        # position when provided.
-        lenny_ids_list = list(lenny_ids) if lenny_ids is not None else None
+        # Accept either an indexable sequence of lenny_ids or a mapping from
+        # a record key -> lenny_id. Convert non-mapping iterables to a list
+        # so indexing works for dict_keys and similar types.
+        lenny_ids_map = lenny_ids if isinstance(lenny_ids, Mapping) else None
+        lenny_ids_list = None if lenny_ids_map else (list(lenny_ids) if lenny_ids is not None else None)
 
         lenny_records = []
         for idx, record in enumerate(ol_records):
             data = record.model_dump()
             # Use the exact lenny_id provided (if any). Do not use the loop
             # index as the id — prefer any existing id in the record otherwise.
-            data["lenny_id"] = (
-                (lenny_ids_list[idx] if lenny_ids_list and idx < len(lenny_ids_list) else data.get("lenny_id"))
-            )
+            # Determine lenny_id from mapping, list, or existing data.
+            assigned_id = None
+            if lenny_ids_map:
+                # Try to match by OpenLibrary record key (e.g. '/works/OL...')
+                rec_key = data.get("key") or data.get("id")
+                assigned_id = lenny_ids_map.get(rec_key)
+            elif lenny_ids_list:
+                if idx < len(lenny_ids_list):
+                    assigned_id = lenny_ids_list[idx]
+
+            data["lenny_id"] = (assigned_id if assigned_id is not None else data.get("lenny_id"))
             # Propagate encryption/loan status and optional base_url onto
             # the record so LennyDataRecord.links() can decide between
             # /borrow and /read endpoints and prefix the API host.
