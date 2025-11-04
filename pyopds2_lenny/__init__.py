@@ -22,43 +22,40 @@ class LennyDataRecord(OpenLibraryDataRecord):
         otherwise `/read` for open-access/readable content. When encrypted
         we also include a `return` endpoint.
         """
-        links = super().links()
-        if self.lenny_id:
-            # Determine whether this record represents encrypted (loaned)
-            # content. Default to False when the attribute is missing.
-            encrypted = getattr(self, "is_encrypted", False)
-            # Accept an optional base_url on the record (set by the
-            # provider) and prefix it before the /v1/api path. Avoid
-            # duplicate slashes.
-            base_url = getattr(self, "base_url", "") or ""
-            base_url = base_url.rstrip("/")
-            path = f"/v1/api/items/{self.lenny_id}"
-            base_uri = f"{base_url}{path}" if base_url else path
+        # Start with any links provided by the OpenLibrary record.
+        base_links = super().links() or []
+        if not self.lenny_id:
+            return base_links
 
-            # Primary acquisition link depends on encryption/loan status.
-            if encrypted:
-                primary = Link(
+        # Small helper to build the base item URI consistently.
+        base_url = (getattr(self, "base_url", "") or "").rstrip("/")
+        if base_url:
+            base_uri = f"{base_url}/v1/api/items/{self.lenny_id}"
+        else:
+            base_uri = f"/v1/api/items/{self.lenny_id}"
+
+        if getattr(self, "is_encrypted", False):
+            return [
+                Link(
                     href=f"{base_uri}/borrow",
                     rel="http://opds-spec.org/acquisition/borrow",
                     type="application/json",
-                )
-                # Add a return endpoint for borrowed items
-                return_link = Link(
+                ),
+                Link(
                     href=f"{base_uri}/return",
                     rel="http://librarysimplified.org/terms/return",
                     type="application/json",
-                )
-                links = [primary, return_link]
-            else:
-                # Open/readable content served at /read
-                primary = Link(
-                    href=f"{base_uri}/read",
-                    rel="http://opds-spec.org/acquisition/open-access",
-                    type="application/json",
-                )
-                links = [primary]
+                ),
+            ]
 
-        return links
+        # Default: open-access/readable content
+        return [
+            Link(
+                href=f"{base_uri}/read",
+                rel="http://opds-spec.org/acquisition/open-access",
+                type="application/json",
+            )
+        ]
 
     def images(self) -> Optional[List[Link]]:
         """Provide cover image link based on Open Library cover ID."""
@@ -74,29 +71,23 @@ class LennyDataRecord(OpenLibraryDataRecord):
 
 
 def _unwrap_search_response(resp):
-    """Normalize different shapes returned by OpenLibraryDataProvider.search."""
+    """Minimal normalizer for the upstream search return shapes.
+
+    Keep this small: accept (records, total) tuples, objects with
+    `records` and optional `total`, or any iterable of records.
+    """
     if isinstance(resp, tuple):
         records = resp[0] if len(resp) >= 1 else []
         total = resp[1] if len(resp) > 1 else None
         return records, total
 
-    for attr in ("records", "docs", "items", "data"):
-        if hasattr(resp, attr):
-            records = getattr(resp, attr)
-            total = None
-            for tot_attr in ("total", "num_found", "numFound", "count", "size"):
-                if hasattr(resp, tot_attr):
-                    total = getattr(resp, tot_attr)
-                    break
-            return records, total
+    if hasattr(resp, "records"):
+        return getattr(resp, "records"), getattr(resp, "total", None)
 
     try:
-        records = list(resp)
-        return records, None
-    except Exception:
-        raise TypeError(
-            "cannot unpack non-iterable search response from OpenLibraryDataProvider.search"
-        )
+        return list(resp), None
+    except TypeError:
+        raise TypeError("cannot unpack non-iterable search response")
 
 
 class LennyDataProvider(OpenLibraryDataProvider):
@@ -115,38 +106,33 @@ class LennyDataProvider(OpenLibraryDataProvider):
         """Perform a metadata search and adapt results into LennyDataRecords."""
         resp = OpenLibraryDataProvider.search(query=query, limit=limit, offset=offset)
 
-        # Handle the SearchResponse returned by pyopds2
         if isinstance(resp, SearchResponse):
             ol_records = resp.records or []
             total = getattr(resp, "total", None)
         else:
             ol_records, total = _unwrap_search_response(resp)
 
-        # Accept either an indexable sequence of lenny_ids or a mapping from
-        # a record key -> lenny_id. Convert non-mapping iterables to a list
-        # so indexing works for dict_keys and similar types.
+        # Accept a mapping {record_key: lenny_id} or a sequence [id1, id2, ...].
         lenny_ids_map = lenny_ids if isinstance(lenny_ids, Mapping) else None
         lenny_ids_list = None if lenny_ids_map else (list(lenny_ids) if lenny_ids is not None else None)
 
-        lenny_records = []
+        lenny_records: List[LennyDataRecord] = []
         for idx, record in enumerate(ol_records):
             data = record.model_dump()
-            # Use the exact lenny_id provided (if any). Do not use the loop
-            # index as the id — prefer any existing id in the record otherwise.
-            # Determine lenny_id from mapping, list, or existing data.
+
             assigned_id = None
             if lenny_ids_map:
-                # Try to match by OpenLibrary record key (e.g. '/works/OL...')
                 rec_key = data.get("key") or data.get("id")
-                assigned_id = lenny_ids_map.get(rec_key)
-            elif lenny_ids_list:
-                if idx < len(lenny_ids_list):
-                    assigned_id = lenny_ids_list[idx]
+                if rec_key is not None:
+                    assigned_id = lenny_ids_map.get(rec_key)
+            elif lenny_ids_list and idx < len(lenny_ids_list):
+                assigned_id = lenny_ids_list[idx]
 
-            data["lenny_id"] = (assigned_id if assigned_id is not None else data.get("lenny_id"))
-            # Propagate encryption/loan status and optional base_url onto
-            # the record so LennyDataRecord.links() can decide between
-            # /borrow and /read endpoints and prefix the API host.
+            # If a lenny id was provided, prefer that; otherwise keep any
+            # existing `lenny_id` the record might already carry.
+            if assigned_id is not None:
+                data["lenny_id"] = assigned_id
+
             data["is_encrypted"] = bool(is_encrypted)
             data["base_url"] = base_url
             lenny_records.append(LennyDataRecord.model_validate(data))
@@ -168,9 +154,9 @@ class LennyDataProvider(OpenLibraryDataProvider):
         """
         publications = [record.to_publication() for record in records]
 
-        base_url = (base_url or "").rstrip("/")
-        def _prefix(path: str) -> str:
-            return f"{base_url}{path}" if base_url else path
+        base = (base_url or "").rstrip("/")
+        def _href(path: str) -> str:
+            return f"{base}{path}" if base else path
 
         return {
             "metadata": {
@@ -181,10 +167,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
             },
             "publications": publications,
             "links": [
-                {"rel": "self", "href": _prefix(f"/v1/api/opds?offset={offset}&limit={limit}")},
-                {
-                    "rel": "next",
-                    "href": _prefix(f"/v1/api/opds?offset={offset + limit}&limit={limit}"),
-                },
+                {"rel": "self", "href": _href(f"/v1/api/opds?offset={offset}&limit={limit}")},
+                {"rel": "next", "href": _href(f"/v1/api/opds?offset={offset + limit}&limit={limit}")},
             ],
         }
