@@ -1,5 +1,5 @@
 from typing import List, Tuple, Optional
-from collections.abc import Mapping
+from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
 from opds2.provider import SearchResponse
 
@@ -107,8 +107,8 @@ class LennyDataProvider(OpenLibraryDataProvider):
         # Convert keys to a predictable list order for mapping
         if isinstance(lenny_ids, Mapping):
             lenny_id_values = list(lenny_ids.keys())
-        elif isinstance(lenny_ids, list):
-            lenny_id_values = lenny_ids
+        elif isinstance(lenny_ids, Iterable) and not isinstance(lenny_ids, (str, bytes)):
+            lenny_id_values = list(lenny_ids)
         else:
             lenny_id_values = []
 
