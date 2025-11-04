@@ -121,13 +121,18 @@ class LennyDataProvider(OpenLibraryDataProvider):
         else:
             ol_records, total = _unwrap_search_response(resp)
 
+        # Normalize lenny_ids to an indexable list (dict_keys or other iterables
+        # may not support indexing). This ensures we pick the exact id by
+        # position when provided.
+        lenny_ids_list = list(lenny_ids) if lenny_ids is not None else None
+
         lenny_records = []
         for idx, record in enumerate(ol_records):
             data = record.model_dump()
             # Use the exact lenny_id provided (if any). Do not use the loop
             # index as the id — prefer any existing id in the record otherwise.
             data["lenny_id"] = (
-                (lenny_ids[idx] if lenny_ids and idx < len(lenny_ids) else data.get("lenny_id"))
+                (lenny_ids_list[idx] if lenny_ids_list and idx < len(lenny_ids_list) else data.get("lenny_id"))
             )
             # Propagate encryption/loan status and optional base_url onto
             # the record so LennyDataRecord.links() can decide between
