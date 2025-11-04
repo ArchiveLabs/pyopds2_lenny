@@ -8,24 +8,28 @@ class LennyDataRecord(OpenLibraryDataRecord):
     """Extends OpenLibraryDataRecord with local borrow/return links for Lenny."""
 
     lenny_id: Optional[int] = None
-    base_url: Optional[str] = None
-    is_encrypted: bool = False
 
     @property
     def type(self) -> str:
         return "http://schema.org/Book"
 
     def links(self) -> List[Link]:
-        """Override acquisition links to use Lenny's API endpoints."""
+        """Override acquisition links to use Lenny's API endpoints.
+
+        If the record was created with an `is_encrypted` flag the primary
+        acquisition link will be `/borrow` (for encrypted/loaned content),
+        otherwise `/read` for open-access/readable content. When encrypted
+        we also include a `return` endpoint.
+        """
         base_links = super().links() or []
         if not self.lenny_id:
             return base_links
 
-        # Correctly prefix base_url
-        base_url = (self.base_url or "").rstrip("/")
-        base_uri = f"{base_url}/v1/api/items/{self.lenny_id}"
+        # Ensure base_url is correctly prefixed
+        base_url = (getattr(self, "base_url", "") or "").rstrip("/")
+        base_uri = f"{base_url}/v1/api/items/{self.lenny_id}" if base_url else f"/v1/api/items/{self.lenny_id}"
 
-        if self.is_encrypted:
+        if getattr(self, "is_encrypted", False):
             return [
                 Link(
                     href=f"{base_uri}/borrow",
@@ -39,7 +43,6 @@ class LennyDataRecord(OpenLibraryDataRecord):
                 ),
             ]
 
-        # Default: open-access link
         return [
             Link(
                 href=f"{base_uri}/read",
@@ -62,12 +65,15 @@ class LennyDataRecord(OpenLibraryDataRecord):
 
 
 def _unwrap_search_response(resp):
+    """Minimal normalizer for the upstream search return shapes."""
     if isinstance(resp, tuple):
         records = resp[0] if len(resp) >= 1 else []
         total = resp[1] if len(resp) > 1 else None
         return records, total
+
     if hasattr(resp, "records"):
         return getattr(resp, "records"), getattr(resp, "total", None)
+
     try:
         return list(resp), None
     except TypeError:
@@ -83,7 +89,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
         numfound: int,
         limit: int,
         offset: int,
-        lenny_ids: Optional[Mapping] = None,
+        lenny_ids: Optional[Mapping[int, int]] = None,
         is_encrypted: Optional[bool] = False,
         base_url: Optional[str] = None,
     ) -> Tuple[List[LennyDataRecord], int]:
@@ -98,22 +104,21 @@ class LennyDataProvider(OpenLibraryDataProvider):
 
         lenny_records: List[LennyDataRecord] = []
 
-        for record in ol_records:
+        # Convert keys to a predictable list order for mapping
+        if isinstance(lenny_ids, Mapping):
+            lenny_id_values = list(lenny_ids.keys())
+        elif isinstance(lenny_ids, list):
+            lenny_id_values = lenny_ids
+        else:
+            lenny_id_values = []
+
+        for idx, record in enumerate(ol_records):
             data = record.model_dump()
-            olid_key = data.get("key") or data.get("edition_key") or ""
-            olid_int = None
-            # Extract the numeric part (e.g. /books/OL37044497M → 37044497)
-            if isinstance(olid_key, str) and "OL" in olid_key:
-                try:
-                    olid_int = int(olid_key.split("OL")[1].split("M")[0])
-                except Exception:
-                    pass
 
-            assigned_id = None
-            if lenny_ids and olid_int in lenny_ids:
-                assigned_id = lenny_ids[olid_int]
+            # Assign lenny_id properly from mapping keys
+            if idx < len(lenny_id_values):
+                data["lenny_id"] = lenny_id_values[idx]
 
-            data["lenny_id"] = assigned_id
             data["is_encrypted"] = bool(is_encrypted)
             data["base_url"] = base_url
             lenny_records.append(LennyDataRecord.model_validate(data))
@@ -128,9 +133,10 @@ class LennyDataProvider(OpenLibraryDataProvider):
         offset: int,
         base_url: Optional[str] = None,
     ):
+        """Construct an OPDS 2.0 JSON feed for Lenny's books."""
         publications = [record.to_publication() for record in records]
-        base = (base_url or "").rstrip("/")
 
+        base = (base_url or "").rstrip("/")
         def _href(path: str) -> str:
             return f"{base}{path}" if base else path
 
