@@ -1,0 +1,2 @@
+git+https://github.com/ArchiveLabs/pyopds2.git
+git+https://github.com/ArchiveLabs/pyopds2_openlibrary.git
