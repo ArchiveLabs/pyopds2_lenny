@@ -1,4 +1,3 @@
-# pyopds_lenny/__init__.py
 from typing import List, Tuple, Optional
 from collections.abc import Mapping
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
@@ -9,32 +8,24 @@ class LennyDataRecord(OpenLibraryDataRecord):
     """Extends OpenLibraryDataRecord with local borrow/return links for Lenny."""
 
     lenny_id: Optional[int] = None
+    base_url: Optional[str] = None
+    is_encrypted: bool = False
 
     @property
     def type(self) -> str:
         return "http://schema.org/Book"
 
     def links(self) -> List[Link]:
-        """Override acquisition links to use Lenny's API endpoints.
-
-        If the record was created with an `is_encrypted` flag the primary
-        acquisition link will be `/borrow` (for encrypted/loaned content),
-        otherwise `/read` for open-access/readable content. When encrypted
-        we also include a `return` endpoint.
-        """
-        # Start with any links provided by the OpenLibrary record.
+        """Override acquisition links to use Lenny's API endpoints."""
         base_links = super().links() or []
         if not self.lenny_id:
             return base_links
 
-        # Small helper to build the base item URI consistently.
-        base_url = (getattr(self, "base_url", "") or "").rstrip("/")
-        if base_url:
-            base_uri = f"{base_url}/v1/api/items/{self.lenny_id}"
-        else:
-            base_uri = f"/v1/api/items/{self.lenny_id}"
+        # Correctly prefix base_url
+        base_url = (self.base_url or "").rstrip("/")
+        base_uri = f"{base_url}/v1/api/items/{self.lenny_id}"
 
-        if getattr(self, "is_encrypted", False):
+        if self.is_encrypted:
             return [
                 Link(
                     href=f"{base_uri}/borrow",
@@ -48,7 +39,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
                 ),
             ]
 
-        # Default: open-access/readable content
+        # Default: open-access link
         return [
             Link(
                 href=f"{base_uri}/read",
@@ -71,19 +62,12 @@ class LennyDataRecord(OpenLibraryDataRecord):
 
 
 def _unwrap_search_response(resp):
-    """Minimal normalizer for the upstream search return shapes.
-
-    Keep this small: accept (records, total) tuples, objects with
-    `records` and optional `total`, or any iterable of records.
-    """
     if isinstance(resp, tuple):
         records = resp[0] if len(resp) >= 1 else []
         total = resp[1] if len(resp) > 1 else None
         return records, total
-
     if hasattr(resp, "records"):
         return getattr(resp, "records"), getattr(resp, "total", None)
-
     try:
         return list(resp), None
     except TypeError:
@@ -99,7 +83,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
         numfound: int,
         limit: int,
         offset: int,
-        lenny_ids: Optional[List[int]] = None,
+        lenny_ids: Optional[Mapping] = None,
         is_encrypted: Optional[bool] = False,
         base_url: Optional[str] = None,
     ) -> Tuple[List[LennyDataRecord], int]:
@@ -112,27 +96,24 @@ class LennyDataProvider(OpenLibraryDataProvider):
         else:
             ol_records, total = _unwrap_search_response(resp)
 
-        # Accept a mapping {record_key: lenny_id} or a sequence [id1, id2, ...].
-        lenny_ids_map = lenny_ids if isinstance(lenny_ids, Mapping) else None
-        lenny_ids_list = None if lenny_ids_map else (list(lenny_ids) if lenny_ids is not None else None)
-
         lenny_records: List[LennyDataRecord] = []
-        for idx, record in enumerate(ol_records):
+
+        for record in ol_records:
             data = record.model_dump()
+            olid_key = data.get("key") or data.get("edition_key") or ""
+            olid_int = None
+            # Extract the numeric part (e.g. /books/OL37044497M → 37044497)
+            if isinstance(olid_key, str) and "OL" in olid_key:
+                try:
+                    olid_int = int(olid_key.split("OL")[1].split("M")[0])
+                except Exception:
+                    pass
 
             assigned_id = None
-            if lenny_ids_map:
-                rec_key = data.get("key") or data.get("id")
-                if rec_key is not None:
-                    assigned_id = lenny_ids_map.get(rec_key)
-            elif lenny_ids_list and idx < len(lenny_ids_list):
-                assigned_id = lenny_ids_list[idx]
+            if lenny_ids and olid_int in lenny_ids:
+                assigned_id = lenny_ids[olid_int]
 
-            # If a lenny id was provided, prefer that; otherwise keep any
-            # existing `lenny_id` the record might already carry.
-            if assigned_id is not None:
-                data["lenny_id"] = assigned_id
-
+            data["lenny_id"] = assigned_id
             data["is_encrypted"] = bool(is_encrypted)
             data["base_url"] = base_url
             lenny_records.append(LennyDataRecord.model_validate(data))
@@ -147,14 +128,9 @@ class LennyDataProvider(OpenLibraryDataProvider):
         offset: int,
         base_url: Optional[str] = None,
     ):
-        """Construct an OPDS 2.0 JSON feed for Lenny's books.
-
-        If a `base_url` is provided, prefix it to the feed-level links so
-        consumers receive fully-qualified URLs instead of relative paths.
-        """
         publications = [record.to_publication() for record in records]
-
         base = (base_url or "").rstrip("/")
+
         def _href(path: str) -> str:
             return f"{base}{path}" if base else path
 
