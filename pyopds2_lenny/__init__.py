@@ -114,9 +114,14 @@ class LennyDataProvider(OpenLibraryDataProvider):
                     return False
                 return seq == list(range(len(seq))) or seq == list(range(1, len(seq) + 1))
 
-            if values and all(isinstance(item, int) for item in values):
+            keys_are_indices = _looks_like_index_sequence(keys)
+            values_are_indices = _looks_like_index_sequence(values)
+
+            if values and not values_are_indices:
                 lenny_id_values = values
-            elif values and (_looks_like_index_sequence(keys) or not keys):
+            elif keys and not keys_are_indices:
+                lenny_id_values = keys
+            elif values and not keys:
                 lenny_id_values = values
             elif keys:
                 lenny_id_values = keys
