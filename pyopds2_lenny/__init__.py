@@ -142,5 +142,5 @@ class LennyDataProvider(OpenLibraryDataProvider):
             data["is_encrypted"] = bool(is_encrypted)
             data["base_url"] = base_url
             lenny_records.append(LennyDataRecord.model_validate(data))
-
+            
         return lenny_records, (total if total is not None else numfound)
