@@ -1,7 +1,7 @@
 from typing import List, Tuple, Optional
 from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
-from pyopds2.provider import SearchResponse
+from pyopds2.provider import DataProvider
 
 
 class LennyDataRecord(OpenLibraryDataRecord):
@@ -96,7 +96,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
         """Perform a metadata search and adapt results into LennyDataRecords."""
         resp = OpenLibraryDataProvider.search(query=query, limit=limit, offset=offset)
 
-        if isinstance(resp, SearchResponse):
+        if isinstance(resp, DataProvider):
             ol_records = resp.records or []
             total = getattr(resp, "total", None)
         else:
