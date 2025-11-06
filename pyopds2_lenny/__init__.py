@@ -1,7 +1,7 @@
 from typing import List, Tuple, Optional
 from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
-from opds2.provider import SearchResponse
+from pyopds2.provider import SearchResponse
 
 
 class LennyDataRecord(OpenLibraryDataRecord):
@@ -142,34 +142,5 @@ class LennyDataProvider(OpenLibraryDataProvider):
             data["is_encrypted"] = bool(is_encrypted)
             data["base_url"] = base_url
             lenny_records.append(LennyDataRecord.model_validate(data))
-
+            
         return lenny_records, (total if total is not None else numfound)
-
-    @staticmethod
-    def create_opds_feed(
-        records: List[LennyDataRecord],
-        total: int,
-        limit: int,
-        offset: int,
-        base_url: Optional[str] = None,
-    ):
-        """Construct an OPDS 2.0 JSON feed for Lenny's books."""
-        publications = [record.to_publication() for record in records]
-
-        base = (base_url or "").rstrip("/")
-        def _href(path: str) -> str:
-            return f"{base}{path}" if base else path
-
-        return {
-            "metadata": {
-                "title": "Lenny Catalog",
-                "totalItems": total,
-                "itemsPerPage": limit,
-                "currentOffset": offset,
-            },
-            "publications": publications,
-            "links": [
-                {"rel": "self", "href": _href(f"/v1/api/opds?offset={offset}&limit={limit}")},
-                {"rel": "next", "href": _href(f"/v1/api/opds?offset={offset + limit}&limit={limit}")},
-            ],
-        }
