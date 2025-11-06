@@ -144,6 +144,43 @@ class LennyDataProvider(OpenLibraryDataProvider):
             lenny_records.append(LennyDataRecord.model_validate(data))
 
         return lenny_records, (total if total is not None else numfound)
+        
+    @staticmethod
+    def search_response(
+        query: str,
+        numfound: int,
+        limit: int,
+        offset: int,
+        lenny_ids: Optional[Mapping[int, int]] = None,
+        is_encrypted: Optional[bool] = False,
+        base_url: Optional[str] = None,
+    ):
+        """Return a `DataProvider.SearchResponse` for consumers that expect it.
+
+        This preserves the original `search` behavior (which returns a
+        (records, total) tuple) while offering an adapter that returns the
+        richer SearchResponse dataclass used by `pyopds2.Catalog` and other
+        consumers.
+        """
+        records, total = LennyDataProvider.search(
+            query=query,
+            numfound=numfound,
+            limit=limit,
+            offset=offset,
+            lenny_ids=lenny_ids,
+            is_encrypted=is_encrypted,
+            base_url=base_url,
+        )
+
+        return DataProvider.SearchResponse(
+            provider=LennyDataProvider,
+            query=query,
+            limit=limit,
+            offset=offset,
+            sort=None,
+            records=records,
+            total=total,
+        )
 
     @staticmethod
     def create_opds_feed(
@@ -152,24 +189,63 @@ class LennyDataProvider(OpenLibraryDataProvider):
         limit: int,
         offset: int,
         base_url: Optional[str] = None,
+        title: str = "Lenny Catalog",
     ):
-        """Construct an OPDS 2.0 JSON feed for Lenny's books."""
-        publications = [record.to_publication() for record in records]
+        """Construct an OPDS 2.0 JSON feed for Lenny's books.
+
+        The function attempts to produce JSON-serializable structures: any
+        Publication models are converted to dicts via `model_dump` when
+        available (pydantic v2). Navigation links include standard OPDS
+        rels (self, start, previous, next, first, last).
+        """
+        # Convert Publication models to JSON-friendly dicts
+        publications = []
+        for record in records:
+            pub = record.to_publication()
+            try:
+                publications.append(pub.model_dump())
+            except Exception:
+                publications.append(pub)
 
         base = (base_url or "").rstrip("/")
+
         def _href(path: str) -> str:
             return f"{base}{path}" if base else path
 
+        safe_limit = max(1, int(limit))
+        safe_offset = max(0, int(offset))
+        safe_total = max(0, int(total))
+
+        last_offset = 0
+        if safe_total and safe_limit:
+            last_page_index = (safe_total - 1) // safe_limit
+            last_offset = last_page_index * safe_limit
+
+        links: List[dict] = []
+        links.append({"rel": "self", "href": _href(f"/v1/api/opds?offset={safe_offset}&limit={safe_limit}")})
+        links.append({"rel": "start", "href": _href("/v1/api/opds")})
+
+        if safe_offset > 0:
+            prev_offset = max(0, safe_offset - safe_limit)
+            links.append({"rel": "previous", "href": _href(f"/v1/api/opds?offset={prev_offset}&limit={safe_limit}")})
+
+        if safe_offset + safe_limit < safe_total:
+            next_offset = safe_offset + safe_limit
+            links.append({"rel": "next", "href": _href(f"/v1/api/opds?offset={next_offset}&limit={safe_limit}")})
+
+        if safe_total:
+            if safe_offset != 0:
+                links.append({"rel": "first", "href": _href(f"/v1/api/opds?offset=0&limit={safe_limit}")})
+            if last_offset and safe_offset != last_offset:
+                links.append({"rel": "last", "href": _href(f"/v1/api/opds?offset={last_offset}&limit={safe_limit}")})
+
         return {
             "metadata": {
-                "title": "Lenny Catalog",
-                "totalItems": total,
-                "itemsPerPage": limit,
-                "currentOffset": offset,
+                "title": title,
+                "totalItems": safe_total,
+                "itemsPerPage": safe_limit,
+                "currentOffset": safe_offset,
             },
             "publications": publications,
-            "links": [
-                {"rel": "self", "href": _href(f"/v1/api/opds?offset={offset}&limit={limit}")},
-                {"rel": "next", "href": _href(f"/v1/api/opds?offset={offset + limit}&limit={limit}")},
-            ],
+            "links": links,
         }
