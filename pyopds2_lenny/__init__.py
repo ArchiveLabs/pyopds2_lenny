@@ -25,9 +25,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
         if not self.lenny_id:
             return base_links
 
-        # Ensure base_url is correctly prefixed
-        base_url = (getattr(self, "base_url", "") or "").rstrip("/")
-        base_uri = f"{base_url}/v1/api/items/{self.lenny_id}" if base_url else f"/v1/api/items/{self.lenny_id}"
+        base_uri = f"{LennyDataProvider.BASE_URL}items/{self.lenny_id}"
 
         if getattr(self, "is_encrypted", False):
             return [
@@ -61,7 +59,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
                     type="image/jpeg",
                 )
             ]
-        return None
+        return []
 
 
 def _unwrap_search_response(resp):
