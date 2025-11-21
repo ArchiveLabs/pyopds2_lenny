@@ -25,6 +25,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
         if not self.lenny_id:
             return super().links() or []
 
+        # Minimal, predictable acquisition links: always use Lenny/Read titles
         lenny_links = [
             Link(
                 rel="self",
@@ -41,6 +42,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
         if self.is_encrypted:
             borrowable = getattr(self, "is_borrowable", None)
             if borrowable is None:
+                # If provider didn't supply, default to available for permissive behavior
                 avail_state = "available"
             else:
                 avail_state = "available" if bool(borrowable) else "unavailable"
@@ -133,6 +135,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
                 data["is_encrypted"] = encryption_map.get(lenny_id, False)
             else:
                 data["is_encrypted"] = False
+            # Attach borrowable flag if provided (keyed by same lenny id)
             if borrowable_map and lenny_id is not None:
                 data["is_borrowable"] = bool(borrowable_map.get(lenny_id, False))
             lenny_records.append(LennyDataRecord.model_validate(data))
@@ -147,9 +150,8 @@ class LennyDataProvider(OpenLibraryDataProvider):
             sort=resp.sort,
         )
 
-
     OPDS_TITLE = "Lenny Catalog"
-
+    
     @staticmethod
     def postprocess_catalog(catalog_dict: dict, title: Optional[str] = None) -> dict:
         """Ensure adapter-provided metadata such as the catalog title are
