@@ -1,13 +1,14 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, cast
 from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
-from pyopds2.provider import DataProvider
+from pyopds2.provider import DataProvider, DataProviderRecord
 
 
 class LennyDataRecord(OpenLibraryDataRecord):
     """Extends OpenLibraryDataRecord with local borrow/return links for Lenny."""
 
     lenny_id: Optional[int] = None
+    is_encrypted: bool = False
 
     @property
     def type(self) -> str:
@@ -21,39 +22,52 @@ class LennyDataRecord(OpenLibraryDataRecord):
         otherwise `/read` for open-access/readable content. When encrypted
         we also include a `return` endpoint.
         """
-        base_links = super().links() or []
         if not self.lenny_id:
-            return base_links
+            return super().links() or []
 
-        base_links.append(Link(
-            rel="self",  
-            href=f"{LennyDataProvider.BASE_URL}/opds/{self.lenny_id}",
-            type="application/opds-publication+json",
-        ))
+        lenny_links = [
+            Link(
+                rel="self",
+                href=f"{LennyDataProvider.BASE_URL}opds/{self.lenny_id}",
+                type="application/opds-publication+json",
+                title=None,
+                templated=False,
+                properties=None,
+            )
+        ]
         
         base_uri = f"{LennyDataProvider.BASE_URL}items/{self.lenny_id}"
-        if getattr(self, "is_encrypted", False):
-            base_links += [
+        if self.is_encrypted:
+            lenny_links += [
                 Link(
                     href=f"{base_uri}/borrow",
                     rel="http://opds-spec.org/acquisition/borrow",
                     type="application/json",
+                    title=None,
+                    templated=False,
+                    properties=None,
                 ),
                 Link(
                     href=f"{base_uri}/return",
                     rel="http://librarysimplified.org/terms/return",
                     type="application/json",
+                    title=None,
+                    templated=False,
+                    properties=None,
                 ),
             ]
         else:
-            base_links += [
+            lenny_links += [
                 Link(
                     href=f"{base_uri}/read",
                     rel="http://opds-spec.org/acquisition/open-access",
                     type="application/json",
+                    title=None,
+                    templated=False,
+                    properties=None,
                 )
             ]
-        return base_links
+        return lenny_links
 
     def images(self) -> Optional[List[Link]]:
         """Provide cover image link based on Open Library cover ID."""
@@ -63,25 +77,12 @@ class LennyDataRecord(OpenLibraryDataRecord):
                     href=f"https://covers.openlibrary.org/b/id/{self.cover_i}-L.jpg",
                     rel="http://opds-spec.org/image",
                     type="image/jpeg",
+                    title=None,
+                    templated=False,
+                    properties=None,
                 )
             ]
         return []
-
-
-def _unwrap_search_response(resp):
-    """Minimal normalizer for the upstream search return shapes."""
-    if isinstance(resp, tuple):
-        records = resp[0] if len(resp) >= 1 else []
-        total = resp[1] if len(resp) > 1 else None
-        return records, total
-
-    if hasattr(resp, "records"):
-        return getattr(resp, "records"), getattr(resp, "total", None)
-
-    try:
-        return list(resp), None
-    except TypeError:
-        raise TypeError("cannot unpack non-iterable search response")
 
 
 class LennyDataProvider(OpenLibraryDataProvider):
@@ -90,21 +91,13 @@ class LennyDataProvider(OpenLibraryDataProvider):
     @staticmethod
     def search(
         query: str,
-        numfound: int,
-        limit: int,
-        offset: int,
+        limit: int = 50,
+        offset: int = 0,
         lenny_ids: Optional[Mapping[int, int]] = None,
-        is_encrypted: Optional[bool] = False,
-        base_url: Optional[str] = None,
-    ) -> Tuple[List[LennyDataRecord], int]:
+        encryption_map: Optional[Mapping[int, bool]] = None,
+    ) -> DataProvider.SearchResponse:
         """Perform a metadata search and adapt results into LennyDataRecords."""
         resp = OpenLibraryDataProvider.search(query=query, limit=limit, offset=offset)
-
-        if isinstance(resp, DataProvider):
-            ol_records = resp.records or []
-            total = getattr(resp, "total", None)
-        else:
-            ol_records, total = _unwrap_search_response(resp)
 
         lenny_records: List[LennyDataRecord] = []
 
@@ -136,15 +129,27 @@ class LennyDataProvider(OpenLibraryDataProvider):
         else:
             lenny_id_values = []
 
-        for idx, record in enumerate(ol_records):
+        for idx, record in enumerate(resp.records):
             data = record.model_dump()
 
             # Assign lenny_id properly from mapping keys
             if idx < len(lenny_id_values):
                 data["lenny_id"] = lenny_id_values[idx]
 
-            data["is_encrypted"] = bool(is_encrypted)
-            data["base_url"] = base_url
+            # Look up encryption status for this specific lenny_id
+            lenny_id = data.get("lenny_id")
+            if encryption_map and lenny_id is not None:
+                data["is_encrypted"] = encryption_map.get(lenny_id, False)
+            else:
+                data["is_encrypted"] = False
             lenny_records.append(LennyDataRecord.model_validate(data))
             
-        return lenny_records, (total if total is not None else numfound)
+        return DataProvider.SearchResponse(
+            provider=LennyDataProvider,
+            records=cast(List[DataProviderRecord], lenny_records),
+            total=resp.total,
+            query=resp.query,
+            limit=resp.limit,
+            offset=resp.offset,
+            sort=resp.sort,
+        )
