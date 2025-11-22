@@ -9,52 +9,10 @@ class LennyDataRecord(OpenLibraryDataRecord):
 
     lenny_id: Optional[int] = None
     is_encrypted: bool = False
-    first_publish_year: Optional[int] = None
-    publisher: Optional[list[str]] = None
 
     @property
     def type(self) -> str:
         return "http://schema.org/Book"
-    
-    def metadata(self):
-        """Override to include additional fields like published date."""
-        from datetime import datetime
-        from pyopds2.models import Contributor
-        
-        metadata = super().metadata()
-        
-        if self.first_publish_year:
-            try:
-                metadata.published = datetime(self.first_publish_year, 1, 1)
-            except:
-                pass
-        
-        if self.publisher and len(self.publisher) > 0:
-            metadata.publisher = [
-                Contributor(
-                    name=pub,
-                    identifier=None,
-                    sortAs=None,
-                    role=None,
-                    links=None,
-                )
-                for pub in self.publisher
-            ]
-        
-        if hasattr(self, 'description') and self.description:
-            if isinstance(self.description, dict):
-                metadata.description = self.description.get('value', str(self.description))
-            elif isinstance(self.description, str):
-                metadata.description = self.description
-        
-        return metadata
-    
-    def to_publication(self):
-        """Override to add @context for Readium Web Publication Manifest."""
-        pub = super().to_publication()
-        pub_dict = pub.model_dump()
-        pub_dict["@context"] = "https://readium.org/webpub-manifest/context.jsonld"
-        return type(pub)(**pub_dict)
 
     def links(self) -> List[Link]:
         """Override acquisition links to use Lenny's API endpoints.
@@ -67,6 +25,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
         if not self.lenny_id:
             return super().links() or []
 
+        # Minimal, predictable acquisition links: always use Lenny/Read titles
         lenny_links = [
             Link(
                 rel="self",
@@ -77,9 +36,17 @@ class LennyDataRecord(OpenLibraryDataRecord):
                 properties=None,
             )
         ]
-        
+
         base_uri = f"{LennyDataProvider.BASE_URL}items/{self.lenny_id}"
+
         if self.is_encrypted:
+            borrowable = getattr(self, "is_borrowable", None)
+            if borrowable is None:
+                # If provider didn't supply, default to available for permissive behavior
+                avail_state = "available"
+            else:
+                avail_state = "available" if bool(borrowable) else "unavailable"
+
             lenny_links.append(
                 Link(
                     href=f"{base_uri}/borrow",
@@ -88,21 +55,14 @@ class LennyDataRecord(OpenLibraryDataRecord):
                     title="Lenny",
                     templated=False,
                     properties={
-                        "availability": {
-                            "state": "available"
-                        },
+                        "availability": {"state": avail_state},
                         "authenticate": {
                             "href": f"{LennyDataProvider.BASE_URL}authenticate",
-                            "type": "application/opds-authentication+json"
+                            "type": "application/opds-authentication+json",
                         },
                         "indirectAcquisition": [
-                            {
-                                "type": "application/vnd.readium.lcp.license.v1.0+json",
-                                "child": [
-                                    {"type": "application/epub+zip"}
-                                ]
-                            }
-                        ]
+                            {"type": "application/vnd.readium.lcp.license.v1.0+json", "child": [{"type": "application/epub+zip"}]}
+                        ],
                     },
                 )
             )
@@ -119,20 +79,6 @@ class LennyDataRecord(OpenLibraryDataRecord):
             )
         return lenny_links
 
-    def images(self) -> Optional[List[Link]]:
-        """Provide cover image link based on Open Library cover ID."""
-        if hasattr(self, "cover_i") and self.cover_i:
-            return [
-                Link(
-                    href=f"https://covers.openlibrary.org/b/id/{self.cover_i}-L.jpg",
-                    rel="http://opds-spec.org/image",
-                    type="image/jpeg",
-                    title=None,
-                    templated=False,
-                    properties=None,
-                )
-            ]
-        return []
 
 
 class LennyDataProvider(OpenLibraryDataProvider):
@@ -145,6 +91,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
         offset: int = 0,
         lenny_ids: Optional[Mapping[int, int]] = None,
         encryption_map: Optional[Mapping[int, bool]] = None,
+        borrowable_map: Optional[Mapping[int, bool]] = None,
     ) -> DataProvider.SearchResponse:
         """Perform a metadata search and adapt results into LennyDataRecords."""
         resp = OpenLibraryDataProvider.search(query=query, limit=limit, offset=offset)
@@ -188,6 +135,8 @@ class LennyDataProvider(OpenLibraryDataProvider):
                 data["is_encrypted"] = encryption_map.get(lenny_id, False)
             else:
                 data["is_encrypted"] = False
+            if borrowable_map and lenny_id is not None:
+                data["is_borrowable"] = bool(borrowable_map.get(lenny_id, False))
             lenny_records.append(LennyDataRecord.model_validate(data))
             
         return DataProvider.SearchResponse(
