@@ -135,7 +135,6 @@ class LennyDataProvider(OpenLibraryDataProvider):
                 data["is_encrypted"] = encryption_map.get(lenny_id, False)
             else:
                 data["is_encrypted"] = False
-            # Attach borrowable flag if provided (keyed by same lenny id)
             if borrowable_map and lenny_id is not None:
                 data["is_borrowable"] = bool(borrowable_map.get(lenny_id, False))
             lenny_records.append(LennyDataRecord.model_validate(data))
@@ -149,26 +148,3 @@ class LennyDataProvider(OpenLibraryDataProvider):
             offset=resp.offset,
             sort=resp.sort,
         )
-
-    OPDS_TITLE = "Lenny Catalog"
-    
-    @staticmethod
-    def postprocess_catalog(catalog_dict: dict, title: Optional[str] = None) -> dict:
-        """Ensure adapter-provided metadata such as the catalog title are
-        present on the dumped Catalog dict. If `title` is provided it will
-        override any missing or existing title; if `title` is None the
-        adapter will only set a sensible default when no title exists.
-        Returns the (possibly mutated) dict for convenience.
-        """
-        if not isinstance(catalog_dict, dict):
-            return catalog_dict
-        meta = catalog_dict.get("metadata") or {}
-        if isinstance(meta, dict):
-            if title:
-                meta["title"] = title
-            elif not meta.get("title"):
-                meta["title"] = LennyDataProvider.OPDS_TITLE
-            catalog_dict["metadata"] = meta
-        else:
-            catalog_dict["metadata"] = {"title": title or LennyDataProvider.OPDS_TITLE}
-        return catalog_dict
