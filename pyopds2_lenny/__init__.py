@@ -5,31 +5,41 @@ from pyopds2.provider import DataProvider, DataProviderRecord
 
 
 class LennyDataRecord(OpenLibraryDataRecord):
-    """Extends OpenLibraryDataRecord with local borrow/return links for Lenny."""
+    """
+    Extends OpenLibraryDataRecord with Lenny-specific acquisition links.
+    
+    Generates OPDS links for:
+    - Encrypted items: self + borrow (with auth properties)
+    - Open-access items: self + read
+    """
 
     lenny_id: Optional[int] = None
     is_encrypted: bool = False
+    is_borrowable: Optional[bool] = None
 
     @property
     def type(self) -> str:
         return "http://schema.org/Book"
 
     def links(self) -> List[Link]:
-        """Override acquisition links to use Lenny's API endpoints.
-
-        If the record was created with an `is_encrypted` flag the primary
-        acquisition link will be `/borrow` (for encrypted/loaned content),
-        otherwise `/read` for open-access/readable content. When encrypted
-        we also include a `return` endpoint.
+        """
+        Generate OPDS acquisition links for this publication.
+        
+        Returns list of Link objects:
+        - self: publication info at /opds/{id}
+        - borrow: (encrypted) auth-required acquisition at /items/{id}/borrow
+        - read: (open-access) direct read at /items/{id}/read
         """
         if not self.lenny_id:
             return super().links() or []
 
-        # Minimal, predictable acquisition links: always use Lenny/Read titles
+        base_url = LennyDataProvider.BASE_URL
+        item_url = f"{base_url}items/{self.lenny_id}"
+        
         lenny_links = [
             Link(
                 rel="self",
-                href=f"{LennyDataProvider.BASE_URL}opds/{self.lenny_id}",
+                href=f"{base_url}opds/{self.lenny_id}",
                 type="application/opds-publication+json",
                 title=None,
                 templated=False,
@@ -37,51 +47,37 @@ class LennyDataRecord(OpenLibraryDataRecord):
             )
         ]
 
-        base_uri = f"{LennyDataProvider.BASE_URL}items/{self.lenny_id}"
-
         if self.is_encrypted:
-            borrowable = getattr(self, "is_borrowable", None)
-            if borrowable is None:
-                # If provider didn't supply, default to available for permissive behavior
-                avail_state = "available"
-            else:
-                avail_state = "available" if bool(borrowable) else "unavailable"
+            avail_state = "available" if self.is_borrowable is not False else "unavailable"
 
             lenny_links.append(
                 Link(
-                    href=f"{base_uri}/read",
+                    href=f"{item_url}/borrow",
                     rel="http://opds-spec.org/acquisition/borrow",
                     type="application/opds-publication+json",
-                    title="Lenny",
+                    title="Borrow",
                     templated=False,
                     properties={
                         "authenticate": {
                             "type": "application/opds-authentication+json",
-                            "href": f"{LennyDataProvider.BASE_URL}oauth/implicit"
+                            "href": f"{base_url}oauth/implicit"
                         },
                         "availability": {"state": avail_state},
-                        "indirectAcquisition": [
-                            {
-                                "type": "application/vnd.readium.lcp.license.v1.0+json",
-                                "child": [
-                                    {
-                                        "type": "application/epub+zip"
-                                    }
-                                ]
-                            }
-                        ],
+                        "indirectAcquisition": [{
+                            "type": "application/vnd.readium.lcp.license.v1.0+json",
+                            "child": [{"type": "application/epub+zip"}]
+                        }],
                     },
                 )
             )
         else:
             lenny_links.append(
                 Link(
-                    href=f"{base_uri}/read",
+                    href=f"{item_url}/read",
                     rel="http://opds-spec.org/acquisition/open-access",
                     type="application/opds-publication+json",
                     title="Read",
                     templated=False,
-                    properties=None,
                 )
             )
         return lenny_links
