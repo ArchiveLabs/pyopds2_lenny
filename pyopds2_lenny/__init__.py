@@ -22,6 +22,13 @@ def build_post_borrow_publication(book_id: int) -> dict:
             link.model_dump(exclude_none=True) 
             for link in record.post_borrow_links()
         ]
+        # Add profile link (since we removed it from general links to hide from feed)
+        publication["links"].append({
+            "rel": "profile",
+            "href": f"{LennyDataProvider.BASE_URL}profile",
+            "type": "application/opds-profile+json",
+            "title": "User Profile"
+        })
         return publication
 
     return {
@@ -261,7 +268,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
                  },
                  {
                     "rel": "http://opds-spec.org/shelf",
-                    "href": f"{base}profile",
+                    "href": f"{base}shelf",
                     "type": "application/opds+json"
                  },
                  {
@@ -270,4 +277,67 @@ class LennyDataProvider(OpenLibraryDataProvider):
                     "type": "application/opds+json"
                  }
             ]
+        }
+
+    @classmethod
+    def get_user_profile(cls, name: Optional[str], email: str, active_loans_count: int, loan_limit: int) -> dict:
+        """
+        Returns the OPDS 2.0 User Profile.
+        """
+        base = cls.BASE_URL
+        
+        return {
+            "metadata": {
+                "title": "User Profile",
+                "type": "http://schema.org/Person",
+                "name": name,
+                "email": email
+            },
+            "links": [
+                {
+                    "rel": "self",
+                    "href": f"{base}profile",
+                    "type": "application/opds-profile+json"
+                },
+                {
+                    "rel": "http://opds-spec.org/shelf",
+                    "href": f"{base}shelf",
+                    "type": "application/opds+json",
+                    "title": "Bookshelf"
+                }
+            ],
+            "loans": {
+                "total": loan_limit,
+                "available": max(0, loan_limit - active_loans_count)
+            },
+            "holds": {
+                "total": 0,
+                "available": 0
+            }
+        }
+
+    @classmethod
+    def get_shelf_feed(cls, publications: List[dict]) -> dict:
+        """
+        Returns the OPDS 2.0 Shelf Feed.
+        """
+        base = cls.BASE_URL
+
+        return {
+            "metadata": {
+                "title": "My Bookshelf"
+            },
+            "links": [
+                {
+                    "rel": "self",
+                    "href": f"{base}shelf", 
+                    "type": "application/opds+json"
+                },
+                {
+                    "rel": "profile",
+                    "href": f"{base}profile",
+                    "type": "application/opds-profile+json"
+                }
+            ],
+            "publications": publications
         }
