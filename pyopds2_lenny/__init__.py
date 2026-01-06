@@ -2,7 +2,41 @@ from typing import List, Tuple, Optional, cast
 from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
 from pyopds2.provider import DataProvider, DataProviderRecord
+from urllib.parse import quote
 
+def build_post_borrow_publication(book_id: int) -> dict:
+    """
+    Build OPDS publication response after successful borrow.
+    
+    Returns publication metadata with direct acquisition links:
+    - self: points to /opds/{id}
+    - acquisition: points to reader with manifest (for reading in browser)
+    - return: points to /items/{id}/return
+    """
+    resp = LennyDataProvider.search(query=f"edition_key:OL{book_id}M", limit=1, lenny_ids=[book_id])
+    
+    if resp.records and isinstance(resp.records[0], LennyDataRecord):
+        record = resp.records[0]
+        publication = record.to_publication().model_dump()
+        publication["links"] = [
+            link.model_dump(exclude_none=True) 
+            for link in record.post_borrow_links()
+        ]
+        # Add profile link (since we removed it from general links to hide from feed)
+        publication["links"].append({
+            "rel": "profile",
+            "href": f"{LennyDataProvider.BASE_URL}profile",
+            "type": "application/opds-profile+json",
+            "title": "User Profile"
+        })
+        return publication
+
+    return {
+        "metadata": {
+            "title": "Unknown Title"
+        },
+        "links": []
+    }
 
 class LennyDataRecord(OpenLibraryDataRecord):
     """
@@ -81,6 +115,49 @@ class LennyDataRecord(OpenLibraryDataRecord):
                 )
             )
         return lenny_links
+
+    def post_borrow_links(self) -> List[Link]:
+        """
+        Generate OPDS links after a successful borrow.
+        Returns: self, read (acquisition), return.
+        """
+        if not self.lenny_id:
+            return []
+
+        base_url = LennyDataProvider.BASE_URL
+        # BASE_URL includes /v1/api/, so we construct root_url for reader which is typically at /
+        root_url = base_url.replace("/v1/api/", "/")
+        
+        manifest_url = f"{base_url}items/{self.lenny_id}/readium/manifest.json"
+        encoded_manifest = quote(manifest_url, safe='')
+        reader_url = f"{root_url}read/manifest/{encoded_manifest}"
+
+        return [
+             Link(
+                rel="self",
+                href=f"{base_url}opds/{self.lenny_id}",
+                type="application/opds-publication+json",
+                title=None,
+                templated=False,
+                properties=None
+            ),
+            Link(
+                rel="http://opds-spec.org/acquisition",
+                href=reader_url,
+                type="text/html",
+                title="Read",
+                templated=False,
+                properties=None
+            ),
+            Link(
+                rel="http://opds-spec.org/acquisition/return",
+                href=f"{base_url}items/{self.lenny_id}/return",
+                type="application/opds-publication+json",
+                title="Return",
+                templated=False,
+                properties=None
+            )
+        ]
 
 
 
@@ -191,7 +268,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
                  },
                  {
                     "rel": "http://opds-spec.org/shelf",
-                    "href": f"{base}profile",
+                    "href": f"{base}shelf",
                     "type": "application/opds+json"
                  },
                  {
@@ -200,4 +277,67 @@ class LennyDataProvider(OpenLibraryDataProvider):
                     "type": "application/opds+json"
                  }
             ]
+        }
+
+    @classmethod
+    def get_user_profile(cls, name: Optional[str], email: str, active_loans_count: int, loan_limit: int) -> dict:
+        """
+        Returns the OPDS 2.0 User Profile.
+        """
+        base = cls.BASE_URL
+        
+        return {
+            "metadata": {
+                "title": "User Profile",
+                "type": "http://schema.org/Person",
+                "name": name,
+                "email": email
+            },
+            "links": [
+                {
+                    "rel": "self",
+                    "href": f"{base}profile",
+                    "type": "application/opds-profile+json"
+                },
+                {
+                    "rel": "http://opds-spec.org/shelf",
+                    "href": f"{base}shelf",
+                    "type": "application/opds+json",
+                    "title": "Bookshelf"
+                }
+            ],
+            "loans": {
+                "total": loan_limit,
+                "available": max(0, loan_limit - active_loans_count)
+            },
+            "holds": {
+                "total": 0,
+                "available": 0
+            }
+        }
+
+    @classmethod
+    def get_shelf_feed(cls, publications: List[dict]) -> dict:
+        """
+        Returns the OPDS 2.0 Shelf Feed.
+        """
+        base = cls.BASE_URL
+
+        return {
+            "metadata": {
+                "title": "My Bookshelf"
+            },
+            "links": [
+                {
+                    "rel": "self",
+                    "href": f"{base}shelf", 
+                    "type": "application/opds+json"
+                },
+                {
+                    "rel": "profile",
+                    "href": f"{base}profile",
+                    "type": "application/opds-profile+json"
+                }
+            ],
+            "publications": publications
         }
