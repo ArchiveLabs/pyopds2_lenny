@@ -73,10 +73,14 @@ class LennyDataRecord(OpenLibraryDataRecord):
         base_url = LennyDataProvider.BASE_URL
         item_url = f"{base_url}items/{self.lenny_id}"
         
+        self_url = f"{base_url}opds/{self.lenny_id}"
+        if getattr(self, "auth_mode_direct", False):
+            self_url += "?auth_mode=direct"
+
         lenny_links = [
             Link(
                 rel="self",
-                href=f"{base_url}opds/{self.lenny_id}",
+                href=self_url,
                 type="application/opds-publication+json",
                 title=None,
                 templated=False,
