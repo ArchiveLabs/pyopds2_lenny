@@ -2,6 +2,8 @@ from typing import List, Tuple, Optional, cast
 from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
 from pyopds2.provider import DataProvider, DataProviderRecord
+from pyopds2 import Catalog, Metadata
+from pyopds2.models import Link as OPDSLink, Navigation as OPDSNavigation
 from urllib.parse import quote
 
 def build_post_borrow_publication(book_id: int, auth_mode_direct: bool = False) -> dict:
@@ -372,3 +374,106 @@ class LennyDataProvider(OpenLibraryDataProvider):
             ],
             "publications": publications
         }
+
+    @classmethod
+    def navigation(cls, limit: int = 50, auth_mode_direct: bool = False) -> List[dict]:
+        """
+        Build standard OPDS navigation links.
+        Returns list of dicts compatible with pyopds2 Navigation model.
+        """
+        base = cls.BASE_URL
+
+        def _href(path: str) -> str:
+            url = f"{base}{path.lstrip('/')}"
+            separator = "&" if "?" in url else "?"
+            return f"{url}{separator}auth_mode=direct" if auth_mode_direct else url
+
+        return [
+            {
+                "href": _href("opds"),
+                "title": "Home",
+                "type": "application/opds+json",
+                "rel": "alternate"
+            },
+            {
+                "href": _href(f"opds?offset=0&limit={limit}"),
+                "title": "Catalog",
+                "type": "application/opds+json",
+                "rel": "collection"
+            },
+            {
+                "href": _href("oauth/implicit"),
+                "title": "Authentication",
+                "type": "application/opds-authentication+json",
+                "rel": "http://opds-spec.org/auth/oauth/implicit"
+            },
+        ]
+
+    @classmethod
+    def build_catalog(
+        cls,
+        search_response: "DataProvider.SearchResponse",
+        title: str = "Lenny Catalog",
+        limit: int = 50,
+        auth_mode_direct: bool = False
+    ) -> dict:
+        """
+        Build complete OPDS 2.0 catalog from search response.
+        Returns dict ready for JSON serialization.
+        """
+        base = cls.BASE_URL
+        suffix = "?auth_mode=direct" if auth_mode_direct else ""
+
+        catalog = Catalog.create(
+            search_response,
+            metadata=Metadata(title=title),
+            navigation=[OPDSNavigation(**n) for n in cls.navigation(limit, auth_mode_direct)],
+            links=[
+                OPDSLink(rel="http://opds-spec.org/shelf",
+                href=f"{base}shelf{suffix}",
+                type="application/opds+json",
+                title="Bookshelf"),
+                OPDSLink(rel="profile",
+                href=f"{base}profile{suffix}",
+                type="application/opds-profile+json",
+                title="User Profile")
+            ]
+        )
+        return catalog.model_dump()
+
+    @classmethod
+    def empty_catalog(cls, offset: int = 0, limit: int = 50, title: str = "Lenny Catalog", auth_mode_direct: bool = False) -> dict:
+        """Build empty OPDS catalog when no items exist."""
+        empty_response = DataProvider.SearchResponse(
+            provider=cls,
+            records=[],
+            total=0,
+            query="",
+            limit=limit,
+            offset=offset,
+            sort=None,
+        )
+        return cls.build_catalog(empty_response, title=title, limit=limit, auth_mode_direct=auth_mode_direct)
+
+    @classmethod
+    def build_publication(
+        cls,
+        record: "LennyDataRecord",
+        auth_mode_direct: bool = False,
+        include_profile_link: bool = True
+    ) -> dict:
+        """Build single publication response with links."""
+        base = cls.BASE_URL
+        suffix = "?auth_mode=direct" if auth_mode_direct else ""
+
+        record.auth_mode_direct = auth_mode_direct
+        pub = record.to_publication().model_dump()
+
+        if include_profile_link and "links" in pub:
+            pub["links"].append({
+                "rel": "profile",
+                "href": f"{base}profile{suffix}",
+                "type": "application/opds-profile+json",
+                "title": "User Profile"
+            })
+        return pub
