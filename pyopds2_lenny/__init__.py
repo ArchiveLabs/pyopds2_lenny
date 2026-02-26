@@ -427,6 +427,10 @@ class LennyDataProvider(OpenLibraryDataProvider):
         base = cls.BASE_URL
         suffix = "?auth_mode=direct" if auth_mode_direct else ""
         return [
+            OPDSLink(rel="start",
+                     href=f"{base}opds",
+                     type="application/opds+json",
+                     title="Home"),
             OPDSLink(rel="http://opds-spec.org/shelf",
                      href=f"{base}shelf{suffix}",
                      type="application/opds+json",
