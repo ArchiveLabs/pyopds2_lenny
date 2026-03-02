@@ -282,7 +282,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
             "description": "Sign in to Lenny",
             "authentication": [
                 {
-                    "type": "http://opds-spec.org/auth/oauth/implicit+pkce",
+                    "type": "http://opds-spec.org/auth/oauth/authorization-code-with-pkce",
                     "links": [
                         {
                             "rel": "authenticate",
