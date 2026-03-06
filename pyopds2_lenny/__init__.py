@@ -439,6 +439,11 @@ class LennyDataProvider(OpenLibraryDataProvider):
                      href=f"{base}profile{suffix}",
                      type="application/opds-profile+json",
                      title="User Profile"),
+            OPDSLink(rel="search",
+                     href=f"{base}opds/search{{?query}}",
+                     type="application/opds+json",
+                     title="Search",
+                     templated=True),
         ]
 
     @classmethod
