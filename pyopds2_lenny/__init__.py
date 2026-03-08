@@ -112,7 +112,8 @@ class LennyDataRecord(OpenLibraryDataRecord):
                     )
                 )
             else:
-                # OAuth Implicit Mode (Default)
+                # OAuth PKCE Mode (Default)
+                oauth_url = LennyDataProvider.OAUTH_URL or base_url
                 lenny_links.append(
                     Link(
                         href=f"{item_url}/borrow",
@@ -123,7 +124,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
                         properties={
                             "authenticate": {
                                 "type": "application/opds-authentication+json",
-                                "href": f"{base_url}oauth/implicit"
+                                "href": f"{oauth_url}implicit"
                             },
                             "availability": {"state": avail_state},
                             "indirectAcquisition": [{
@@ -199,6 +200,8 @@ class LennyDataRecord(OpenLibraryDataRecord):
 class LennyDataProvider(OpenLibraryDataProvider):
     """Adapts Open Library metadata for Lenny's local catalog."""
 
+    OAUTH_URL: str = ""
+
     @staticmethod
     def search(
         query: str,
@@ -268,27 +271,33 @@ class LennyDataProvider(OpenLibraryDataProvider):
     def get_authentication_document(cls) -> dict:
         """
         Returns the OPDS Authentication Document (JSON).
-        Uses cls.BASE_URL which should be set by the application.
+        Uses cls.BASE_URL for API links and cls.OAUTH_URL for OAuth endpoints.
         """
         base = cls.BASE_URL
-        
+        oauth = cls.OAUTH_URL or base
+
         return {
-            "id": f"{base}oauth/implicit",
+            "id": f"{oauth}implicit",
             "title": "Lenny Authentication",
             "description": "Sign in to Lenny",
             "authentication": [
                 {
-                    "type": "http://opds-spec.org/auth/oauth/implicit",
+                    "type": "http://opds-spec.org/auth/oauth/authorization-code-with-pkce",
                     "links": [
                         {
                             "rel": "authenticate",
-                            "href": f"{base}oauth/authorize",
+                            "href": f"{oauth}authorize",
                             "type": "text/html"
                         },
                         {
+                            "rel": "code",
+                            "href": f"{oauth}token",
+                            "type": "application/json"
+                        },
+                        {
                             "rel": "refresh",
-                            "href": f"{base}oauth/authorize",
-                            "type": "text/html"
+                            "href": f"{oauth}token",
+                            "type": "application/json"
                         }
                     ]
                 }
@@ -414,10 +423,10 @@ class LennyDataProvider(OpenLibraryDataProvider):
                 "rel": "collection"
             },
             {
-                "href": _href("oauth/implicit"),
+                "href": f"{cls.OAUTH_URL or base}implicit",
                 "title": "Authentication",
                 "type": "application/opds-authentication+json",
-                "rel": "http://opds-spec.org/auth/oauth/implicit"
+                "rel": "http://opds-spec.org/auth/oauth/implicit+pkce"
             },
         ]
         
