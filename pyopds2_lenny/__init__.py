@@ -1,10 +1,64 @@
-from typing import List, Tuple, Optional, cast
+import re
+from typing import List, Tuple, Optional, Set, cast
 from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
 from pyopds2.provider import DataProvider, DataProviderRecord
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link as OPDSLink, Navigation as OPDSNavigation
 from urllib.parse import quote
+
+# Open Library edition keys look like ``/books/OL37044497M``; work keys end in
+# ``W`` and must not match.
+_EDITION_KEY_RE = re.compile(r"^OL(\d+)M$")
+
+
+def _edition_id(data: Mapping) -> Optional[int]:
+    """Return the Open Library edition number carried by a dumped record.
+
+    ``lenny_id`` *is* the OL edition number, so the record's own edition key is
+    the only trustworthy source for it. Prefer the surfaced edition document;
+    fall back to the record's own key for callers handed an edition rather than
+    a work.
+    """
+    candidates: List[object] = []
+
+    editions = data.get("editions")
+    if isinstance(editions, Mapping):
+        docs = editions.get("docs") or []
+        if docs and isinstance(docs[0], Mapping):
+            candidates.append(docs[0].get("key"))
+    candidates.append(data.get("key"))
+
+    for key in candidates:
+        if not isinstance(key, str):
+            continue
+        if match := _EDITION_KEY_RE.match(key.rsplit("/", 1)[-1]):
+            return int(match.group(1))
+    return None
+
+
+def _known_lenny_ids(lenny_ids) -> Set[int]:
+    """Collapse the caller's ``lenny_ids`` argument into a set of edition ids.
+
+    Callers key the mapping by OL edition id (``{edition_id: edition_id}``),
+    but older ones passed ``{index: edition_id}``. Both are accepted by reading
+    keys *and* values: this set only decides which records count as Lenny
+    holdings — the id actually assigned always comes from the record itself, so
+    an extra index in here cannot mislabel a publication.
+    """
+    if isinstance(lenny_ids, Mapping):
+        return {
+            value
+            for value in (*lenny_ids.keys(), *lenny_ids.values())
+            if isinstance(value, int) and not isinstance(value, bool)
+        }
+    if isinstance(lenny_ids, Iterable) and not isinstance(lenny_ids, (str, bytes)):
+        return {
+            value for value in lenny_ids
+            if isinstance(value, int) and not isinstance(value, bool)
+        }
+    return set()
+
 
 def build_post_borrow_publication(book_id: int, auth_mode_direct: bool = False) -> dict:
     """
@@ -208,42 +262,25 @@ class LennyDataProvider(OpenLibraryDataProvider):
         encryption_map: Optional[Mapping[int, bool]] = None,
         borrowable_map: Optional[Mapping[int, bool]] = None,
     ) -> DataProvider.SearchResponse:
-        """Perform a metadata search and adapt results into LennyDataRecords."""
+        """Perform a metadata search and adapt results into LennyDataRecords.
+
+        ``lenny_id`` is keyed off each record's own Open Library edition id, not
+        its position in the response. Open Library does not echo back the order
+        of an ``edition_key:(A OR B OR ...)`` disjunction, and it drops records
+        that fail its cover/acquisition/access filters, so a positional mapping
+        hands publications another book's borrow, read and return links.
+        """
         resp = OpenLibraryDataProvider.search(query=query, limit=limit, offset=offset)
 
         lenny_records: List[LennyDataRecord] = []
-        if isinstance(lenny_ids, Mapping):
-            keys = list(lenny_ids.keys())
-            values = list(lenny_ids.values())
+        known_ids = _known_lenny_ids(lenny_ids)
 
-            def _looks_like_index_sequence(seq: List[int]) -> bool:
-                if not seq or not all(isinstance(item, int) for item in seq):
-                    return False
-                return seq == list(range(len(seq))) or seq == list(range(1, len(seq) + 1))
-
-            keys_are_indices = _looks_like_index_sequence(keys)
-            values_are_indices = _looks_like_index_sequence(values)
-
-            if values and not values_are_indices:
-                lenny_id_values = values
-            elif keys and not keys_are_indices:
-                lenny_id_values = keys
-            elif values and not keys:
-                lenny_id_values = values
-            elif keys:
-                lenny_id_values = keys
-            else:
-                lenny_id_values = []
-        elif isinstance(lenny_ids, Iterable) and not isinstance(lenny_ids, (str, bytes)):
-            lenny_id_values = list(lenny_ids)
-        else:
-            lenny_id_values = []
-
-        for idx, record in enumerate(resp.records):
+        for record in resp.records:
             data = record.model_dump()
 
-            if idx < len(lenny_id_values):
-                data["lenny_id"] = lenny_id_values[idx]
+            edition_id = _edition_id(data)
+            if edition_id is not None and edition_id in known_ids:
+                data["lenny_id"] = edition_id
 
             lenny_id = data.get("lenny_id")
             if encryption_map and lenny_id is not None:
