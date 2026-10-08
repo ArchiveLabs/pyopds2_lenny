@@ -253,6 +253,8 @@ class LennyDataRecord(OpenLibraryDataRecord):
 class LennyDataProvider(OpenLibraryDataProvider):
     """Adapts Open Library metadata for Lenny's local catalog."""
 
+    OAUTH_ISSUER: str = ""
+
     @staticmethod
     def search(
         query: str,
@@ -309,7 +311,7 @@ class LennyDataProvider(OpenLibraryDataProvider):
         """
         base = cls.BASE_URL
         
-        return {
+        doc = {
             "id": f"{base}oauth/implicit",
             "title": "Lenny Authentication",
             "description": "Sign in to Lenny",
@@ -348,6 +350,18 @@ class LennyDataProvider(OpenLibraryDataProvider):
                  }
             ]
         }
+        if cls.OAUTH_ISSUER:
+            # ponytail: provisional type/rels until the spec URI is confirmed; paths hardcoded to Lenny's /v1/api/oauth2
+            oauth = f"{cls.OAUTH_ISSUER.rstrip('/')}/v1/api/oauth2"
+            doc["authentication"].append({
+                "type": "http://opds-spec.org/auth/oauth/authorization-code-with-pkce",
+                "links": [
+                    {"rel": "authenticate", "href": f"{oauth}/authorize", "type": "text/html"},
+                    {"rel": "code", "href": f"{oauth}/token", "type": "application/json"},
+                    {"rel": "refresh", "href": f"{oauth}/token", "type": "application/json"},
+                ]
+            })
+        return doc
 
     @classmethod
     def get_user_profile(cls, name: Optional[str], email: str, active_loans_count: int, loan_limit: int) -> dict:
