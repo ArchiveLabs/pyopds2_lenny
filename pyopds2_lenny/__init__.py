@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple, Optional, Set, cast
+from typing import Iterable, List, Tuple, Optional, Set, cast
 from collections.abc import Mapping, Iterable
 from pyopds2_openlibrary import OpenLibraryDataProvider, OpenLibraryDataRecord, Link
 from pyopds2.provider import DataProvider, DataProviderRecord
@@ -304,10 +304,18 @@ class LennyDataProvider(OpenLibraryDataProvider):
         )
 
     @classmethod
-    def get_authentication_document(cls) -> dict:
+    def get_authentication_document(cls, flows: Optional[Iterable[str]] = None) -> dict:
         """
         Returns the OPDS Authentication Document (JSON).
         Uses cls.BASE_URL which should be set by the application.
+
+        ``flows`` optionally selects entries: "implicit" and/or "pkce". None
+        returns the implicit entry plus PKCE when OAUTH_ISSUER is set. A flow
+        that is unavailable is skipped; if none remain, implicit is returned.
+
+        The document ``id`` follows the flows returned, and the host app must
+        serve both addresses: ``{BASE_URL}oauth/implicit`` (implicit, or both)
+        and ``{BASE_URL}oauth/authentication`` (PKCE only).
         """
         base = cls.BASE_URL
         
@@ -361,6 +369,13 @@ class LennyDataProvider(OpenLibraryDataProvider):
                     {"rel": "refresh", "href": f"{oauth}/token", "type": "application/json"},
                 ]
             })
+        if flows is not None:
+            wanted = set(flows)
+            auth = doc["authentication"]
+            keep = [a for a, n in zip(auth, ("implicit", "pkce")) if n in wanted]
+            doc["authentication"] = keep or auth[:1]
+            if len(doc["authentication"]) == 1 and "pkce" in doc["authentication"][0]["type"]:
+                doc["id"] = f"{base}oauth/authentication"
         return doc
 
     @classmethod
