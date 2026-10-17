@@ -109,6 +109,9 @@ class LennyDataRecord(OpenLibraryDataRecord):
     is_encrypted: bool = False
     is_borrowable: Optional[bool] = None
     auth_mode_direct: bool = False
+    # `id` of the Authentication Document the host app serves now (it changes with
+    # the admin's flow switch). None keeps the implicit address.
+    auth_doc_id: Optional[str] = None
 
     @property
     def type(self) -> str:
@@ -177,7 +180,7 @@ class LennyDataRecord(OpenLibraryDataRecord):
                         properties={
                             "authenticate": {
                                 "type": "application/opds-authentication+json",
-                                "href": f"{base_url}oauth/implicit"
+                                "href": self.auth_doc_id or f"{base_url}oauth/implicit"
                             },
                             "availability": {"state": avail_state},
                             "indirectAcquisition": [{

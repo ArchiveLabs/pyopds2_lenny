@@ -43,3 +43,16 @@ def test_flows_selection_and_id(monkeypatch):
 def test_flows_unavailable_falls_back_to_implicit(monkeypatch):
     assert _doc(monkeypatch, "", ["pkce"]) == ("http://x/oauth/implicit", ["implicit"])
     assert _doc(monkeypatch, "https://l", []) == ("http://x/oauth/implicit", ["implicit"])
+
+
+def _borrow_auth_href(monkeypatch, auth_doc_id=None):
+    from pyopds2_lenny import LennyDataRecord
+    monkeypatch.setattr(LennyDataProvider, "BASE_URL", "http://x/")
+    rec = LennyDataRecord(title="t", lenny_id=1, is_encrypted=True, auth_doc_id=auth_doc_id)
+    borrow = [l for l in rec.links() if l.rel.endswith("/borrow")][0]
+    return borrow.properties["authenticate"]["href"]
+
+
+def test_borrow_link_names_the_given_auth_doc(monkeypatch):
+    assert _borrow_auth_href(monkeypatch) == "http://x/oauth/implicit"
+    assert _borrow_auth_href(monkeypatch, "http://x/oauth/authentication") == "http://x/oauth/authentication"
